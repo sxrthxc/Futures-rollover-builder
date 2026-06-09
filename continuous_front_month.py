@@ -1,41 +1,3 @@
-"""
-futures_roll_builder.py
-=======================
-PURPOSE
--------
-Clean messy Databento MNQ futures data (which has 2-3 contracts per timestamp
-plus calendar spreads) into a single continuous series with exactly ONE bar
-per timestamp — always the correct front-month contract.
-
-HOW THE ROLL SCHEDULE IS USED
-------------------------------
-Volume_Crossover_Date is the LAST date you trade the current contract.
-From the NEXT calendar day onward, you switch to the next contract.
-
-Example from the CSV:
-  MNQH21  Volume_Crossover_Date = 2021-03-11
-  MNQM21  Volume_Crossover_Date = 2021-06-10
-
-  => Trade MNQH1 from start of data  up to and INCLUDING 2021-03-11
-  => Trade MNQM1 from 2021-03-12     up to and INCLUDING 2021-06-10
-  => Trade MNQU1 from 2021-06-11     ... and so on
-
-SYMBOL FORMAT MISMATCH (handled automatically)
-----------------------------------------------
-Roll schedule uses 2-digit year:  MNQH21, MNQM22
-Market data uses  1-digit year:   MNQH1,  MNQM2
-
-Script converts automatically:    MNQH21 -> MNQH1
-
-INPUT FILES
------------
-1. mnq_volume_crossover.csv  (roll schedule)
-2. Your Databento market data CSV
-
-OUTPUT
-------
-continuous_front_month.csv  — one row per timestamp, correct contract, roll flag
-"""
 
 import pandas as pd
 
@@ -43,7 +5,6 @@ import pandas as pd
 ROLL_SCHEDULE_PATH = r"D:\output\mnq_volume_crossover.csv"
 MARKET_DATA_PATH   = r"D:\output\glbx-mdp3-20210101-20260429.ohlcv-1m.csv"
 OUTPUT_PATH        = r"D:\output\continuous_front_month1.csv"
-# ── STEP 1: Load the roll schedule and build date ranges ──────────────────────
 
 def build_active_contract_map(roll_csv_path: str) -> pd.DataFrame:
     """
@@ -61,9 +22,9 @@ def build_active_contract_map(roll_csv_path: str) -> pd.DataFrame:
     rs["Volume_Crossover_Date"] = pd.to_datetime(rs["Volume_Crossover_Date"]).dt.date
     rs["Expiry_Date"]           = pd.to_datetime(rs["Expiry_Date"]).dt.date
 
-    # Convert roll-schedule symbol (MNQH21) -> market-data symbol (MNQH1)
+    
     def to_market_sym(s):
-        # s = e.g. "MNQH21"  ->  prefix "MNQ" + month_code "H" + last digit "1"
+       
         return "MNQ" + s[3] + s[-1]
 
     rs["market_symbol"] = rs["Contract"].apply(to_market_sym)
@@ -71,10 +32,10 @@ def build_active_contract_map(roll_csv_path: str) -> pd.DataFrame:
     rows = []
     for i, row in rs.iterrows():
         if i == 0:
-            # First contract is active from the very start of the dataset
+            
             from_date = pd.Timestamp("2021-01-01").date()
         else:
-            # Active from the day AFTER the previous contract's crossover date
+            
             prev_crossover = rs.loc[i - 1, "Volume_Crossover_Date"]
             from_date = prev_crossover + pd.Timedelta(days=1)
 
@@ -98,7 +59,6 @@ def build_active_contract_map(roll_csv_path: str) -> pd.DataFrame:
     return schedule
 
 
-# ── STEP 2: Load and clean market data ────────────────────────────────────────
 
 def load_market_data(path: str) -> pd.DataFrame:
     """
@@ -109,17 +69,17 @@ def load_market_data(path: str) -> pd.DataFrame:
     """
     df = pd.read_csv(path)
 
-    # Drop spreads / synthetics
+    
     spread_mask = df["symbol"].str.contains("-", na=False)
     n_spreads   = spread_mask.sum()
     df = df[~spread_mask].copy()
     print(f"\n[clean]  Removed {n_spreads:,} spread/synthetic rows")
     print(f"[clean]  Remaining symbols in data: {sorted(df['symbol'].unique().tolist())}")
 
-    # Parse timestamps
+    
     df["ts_event"] = pd.to_datetime(df["ts_event"], utc=True)
 
-    # Sort
+    
     df = df.sort_values("ts_event").reset_index(drop=True)
 
     print(f"[clean]  {len(df):,} total rows after spread removal")
@@ -127,7 +87,7 @@ def load_market_data(path: str) -> pd.DataFrame:
     return df
 
 
-# ── STEP 3: Filter to front-month contract per timestamp ──────────────────────
+
 
 def build_continuous_series(
     market_df: pd.DataFrame,
@@ -141,7 +101,7 @@ def build_continuous_series(
     This guarantees exactly one contract per timestamp.
     Then concatenates all segments in order.
     """
-    # Add a date column for easy filtering (date only, no time)
+   
     market_df["_date"] = market_df["ts_event"].dt.date
 
     segments = []
@@ -162,7 +122,7 @@ def build_continuous_series(
                   f"[{from_date} -> {until_date}]")
             continue
 
-        # Mark the first bar of this contract as a roll event
+        
         seg["roll"] = False
         seg.iloc[0, seg.columns.get_loc("roll")] = True
 
@@ -181,30 +141,30 @@ def build_continuous_series(
 
     combined = pd.concat(segments, ignore_index=True)
 
-    # Drop the helper date column
+  
     combined = combined.drop(columns=["_date"])
 
-    # Final sort and dedup (safety net — should already be clean)
+    
     combined = (
         combined
         .sort_values("ts_event")
-        .drop_duplicates(subset=["ts_event"])   # one row per timestamp
+        .drop_duplicates(subset=["ts_event"])   
         .reset_index(drop=True)
     )
 
     return combined
 
 
-# ── STEP 4: Validate and format output ───────────────────────────────────────
+
 
 OUTPUT_COLS = ["ts_event", "symbol", "open", "high", "low", "close", "volume", "roll"]
 
 def finalise(df: pd.DataFrame) -> pd.DataFrame:
-    # Keep only needed columns (add any extras you want here)
+    
     available = [c for c in OUTPUT_COLS if c in df.columns]
     df = df[available].copy()
 
-    # Hard checks
+    
     n_dupes = df.duplicated(subset=["ts_event"]).sum()
     assert n_dupes == 0, f"FAIL: {n_dupes} duplicate timestamps found!"
     assert df["ts_event"].is_monotonic_increasing, "FAIL: timestamps not sorted!"
@@ -212,7 +172,7 @@ def finalise(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# ── STEP 5: Print summary ────────────────────────────────────────────────────
+
 
 def print_summary(df: pd.DataFrame) -> None:
     rolls = df[df["roll"]]
